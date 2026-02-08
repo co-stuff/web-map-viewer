@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web Map Viewer</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.182.0/build/three.module.js"
+    }
+  }
+  </script>
+</head>
+
+<body>
+  <div id="app">
+    <div id="menuBar">
+      <div class="menu-item" data-menu="file">
+        <span class="menu-label">File</span>
+        <div class="menu-dropdown">
+          <button data-action="openWebMap">Open Web Map</button>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="view">
+        <span class="menu-label">View</span>
+        <div class="menu-dropdown">
+          <button data-action="toggleAccess" class="checked">Show Access Grid</button>
+          <button data-action="togglePortals" class="checked">Show Portals</button>
+          <button data-action="toggleEffects" class="checked">Show Effects</button>
+          <button data-action="toggleSounds" class="checked">Show Sounds</button>
+          <button data-action="toggleCovers" class="checked">Show Covers</button>
+          <button data-action="toggleScenes" class="checked">Show Scenes</button>
+          <hr>
+          <button data-action="goTo" disabled>Go To...<kbd>Ctrl+G</kbd></button>
+          <button data-action="centerMap" disabled>Center Map<kbd>Home</kbd></button>
+          <button data-action="fitView" disabled>Fit to View<kbd>0</kbd></button>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="help">
+        <span class="menu-label">Help</span>
+        <div class="menu-dropdown">
+          <button data-action="about">About</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="mainContent">
+      <div id="viewport">
+        <canvas id="overlayCanvas"></canvas>
+        <div id="noFile">
+          <div id="noFileMsg">No map loaded.<br>File &gt; Open Web Map</div>
+          <div id="mapList" style="display:none">
+            <div id="mapListTitle">Available Maps</div>
+            <div id="mapListItems"></div>
+          </div>
+        </div>
+      </div>
+      <div id="panel">
+
+        <div class="imgui-window" id="webMapInfo" style="display:none">
+          <div class="imgui-title">Map Info</div>
+          <div class="imgui-body">
+            <div id="mapInfoContent" class="imgui-text"></div>
+          </div>
+        </div>
+
+        <div class="imgui-window">
+          <div class="imgui-title">Display</div>
+          <div class="imgui-body">
+            <label class="imgui-checkbox"><input type="checkbox" id="cAccess" checked><span class="cb"></span>Show Access Grid</label>
+            <label class="imgui-checkbox"><input type="checkbox" id="cPortals" checked><span class="cb"></span>Show Portals</label>
+            <label class="imgui-checkbox"><input type="checkbox" id="cEffects" checked><span class="cb"></span>Show Effects</label>
+            <label class="imgui-checkbox"><input type="checkbox" id="cSounds" checked><span class="cb"></span>Show Sounds</label>
+            <label class="imgui-checkbox"><input type="checkbox" id="cCovers" checked><span class="cb"></span>Show Covers</label>
+            <label class="imgui-checkbox"><input type="checkbox" id="cScenes" checked><span class="cb"></span>Show Scenes</label>
+          </div>
+        </div>
+
+        <div class="imgui-window" id="webMapObjects" style="display:none">
+          <div class="imgui-title">Objects</div>
+          <div class="imgui-body" style="padding:0">
+            <div class="obj-tabs">
+              <button class="obj-tab active" data-objtab="objPortals">Portals</button>
+              <button class="obj-tab" data-objtab="objEffects">Effects</button>
+              <button class="obj-tab" data-objtab="objSounds">Sounds</button>
+              <button class="obj-tab" data-objtab="objCovers">Covers</button>
+              <button class="obj-tab" data-objtab="objScenes">Scenes</button>
+            </div>
+            <div id="objPortals" class="obj-content active"></div>
+            <div id="objEffects" class="obj-content"></div>
+            <div id="objSounds" class="obj-content"></div>
+            <div id="objCovers" class="obj-content"></div>
+            <div id="objScenes" class="obj-content"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div id="statusBar">
+      <span id="sHover">Hover: (-1, -1)</span>
+      <span id="sZoom">Zoom: 1.0</span>
+      <span id="sMode">MAP</span>
+      <span id="sFps">FPS: 0</span>
+    </div>
+  </div>
+
+  <dialog id="dlgGoTo">
+    <div class="dlg-title">Go To Position</div>
+    <div class="dlg-body">
+      <div class="drow"><label>X:</label><input type="number" id="dGX" value="0"></div>
+      <div class="drow"><label>Y:</label><input type="number" id="dGY" value="0"></div>
+      <div id="dMapSize"></div>
+      <div class="dactions">
+        <button id="dGo">Go</button>
+        <button id="dCenter">Center Map</button>
+        <button id="dCancel">Cancel</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlgAbout">
+    <div class="dlg-title">Web Map Viewer</div>
+    <div class="dlg-body">
+      <div class="imgui-text">Conquer Online Web Map Viewer</div>
+      <div class="imgui-text">Version: 3.0</div>
+      <div class="imgui-text-dim">Thanks to: Spirited</div>
+      <div class="dactions"><button id="dAboutOk">OK</button></div>
+    </div>
+  </dialog>
+
+  <input type="file" id="webMapIn" webkitdirectory style="display:none">
+
+  <script type="module" src="js/main.js"></script>
+</body>
+
+</html>
