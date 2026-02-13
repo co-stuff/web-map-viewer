@@ -3,9 +3,10 @@
 
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Web Map Viewer</title>
   <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
   <script type="importmap">
   {
     "imports": {
@@ -18,10 +19,18 @@
 <body>
   <div id="app">
     <div id="menuBar">
+      <button id="btnHamburger" aria-label="Toggle panel">&#9776;</button>
       <div class="menu-item" data-menu="file">
         <span class="menu-label">File</span>
         <div class="menu-dropdown">
-          <button data-action="openWebMap">Open Web Map</button>
+          <button data-action="openWebMap">Open Web Map (Folder)</button>
+          <button data-action="openZipMap">Open Web Map (ZIP - DBG)</button>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="maps">
+        <span class="menu-label">Maps</span>
+        <div class="menu-dropdown" id="mapsDropdown">
+          <div id="mapsDropdownEmpty" class="menu-dropdown-empty">No maps available</div>
         </div>
       </div>
       <div class="menu-item" data-menu="view">
@@ -33,6 +42,8 @@
           <button data-action="toggleSounds" class="checked">Show Sounds</button>
           <button data-action="toggleCovers" class="checked">Show Covers</button>
           <button data-action="toggleScenes" class="checked">Show Scenes</button>
+          <button data-action="toggleNpcs" class="checked">Show NPCs</button>
+          <button data-action="toggleMobs" class="checked">Show Mobs</button>
           <hr>
           <button data-action="goTo" disabled>Go To...<kbd>Ctrl+G</kbd></button>
           <button data-action="centerMap" disabled>Center Map<kbd>Home</kbd></button>
@@ -47,6 +58,7 @@
       </div>
     </div>
 
+    <div id="panelBackdrop"></div>
     <div id="mainContent">
       <div id="viewport">
         <canvas id="overlayCanvas"></canvas>
@@ -70,12 +82,14 @@
         <div class="imgui-window">
           <div class="imgui-title">Display</div>
           <div class="imgui-body">
-            <label class="imgui-checkbox"><input type="checkbox" id="cAccess" checked><span class="cb"></span>Show Access Grid</label>
-            <label class="imgui-checkbox"><input type="checkbox" id="cPortals" checked><span class="cb"></span>Show Portals</label>
-            <label class="imgui-checkbox"><input type="checkbox" id="cEffects" checked><span class="cb"></span>Show Effects</label>
-            <label class="imgui-checkbox"><input type="checkbox" id="cSounds" checked><span class="cb"></span>Show Sounds</label>
+            <div class="imgui-checkbox-row"><label class="imgui-checkbox"><input type="checkbox" id="cAccess" checked><span class="cb"></span>Show Access Grid</label><input type="color" class="color-swatch" id="clrAccess" value="#c73333" title="Access grid color"></div>
+            <div class="imgui-checkbox-row"><label class="imgui-checkbox"><input type="checkbox" id="cPortals" checked><span class="cb"></span>Show Portals</label><input type="color" class="color-swatch" id="clrPortals" value="#00ffff" title="Portal color"></div>
+            <div class="imgui-checkbox-row"><label class="imgui-checkbox"><input type="checkbox" id="cEffects" checked><span class="cb"></span>Show Effects</label><input type="color" class="color-swatch" id="clrEffects" value="#ffff00" title="Effect color"></div>
+            <div class="imgui-checkbox-row"><label class="imgui-checkbox"><input type="checkbox" id="cSounds" checked><span class="cb"></span>Show Sounds</label><input type="color" class="color-swatch" id="clrSounds" value="#64ff64" title="Sound color"></div>
             <label class="imgui-checkbox"><input type="checkbox" id="cCovers" checked><span class="cb"></span>Show Covers</label>
             <label class="imgui-checkbox"><input type="checkbox" id="cScenes" checked><span class="cb"></span>Show Scenes</label>
+            <div class="imgui-checkbox-row"><label class="imgui-checkbox"><input type="checkbox" id="cNpcs" checked><span class="cb"></span>Show NPCs</label><input type="color" class="color-swatch" id="clrNpcs" value="#ff8800" title="NPC color"></div>
+            <div class="imgui-checkbox-row"><label class="imgui-checkbox"><input type="checkbox" id="cMobs" checked><span class="cb"></span>Show Mobs</label><input type="color" class="color-swatch" id="clrMobs" value="#ff4444" title="Mob color"></div>
           </div>
         </div>
 
@@ -88,12 +102,16 @@
               <button class="obj-tab" data-objtab="objSounds">Sounds</button>
               <button class="obj-tab" data-objtab="objCovers">Covers</button>
               <button class="obj-tab" data-objtab="objScenes">Scenes</button>
+              <button class="obj-tab" data-objtab="objNpcs">NPCs</button>
+              <button class="obj-tab" data-objtab="objMobs">Mobs</button>
             </div>
             <div id="objPortals" class="obj-content active"></div>
             <div id="objEffects" class="obj-content"></div>
             <div id="objSounds" class="obj-content"></div>
             <div id="objCovers" class="obj-content"></div>
             <div id="objScenes" class="obj-content"></div>
+            <div id="objNpcs" class="obj-content"></div>
+            <div id="objMobs" class="obj-content"></div>
           </div>
         </div>
 
@@ -105,6 +123,14 @@
       <span id="sZoom">Zoom: 1.0</span>
       <span id="sMode">MAP</span>
       <span id="sFps">FPS: 0</span>
+    </div>
+
+    <div id="loadingOverlay" style="display:none">
+      <div id="loadingCard">
+        <div id="loadingTitle">Loading Map</div>
+        <div id="loadingBarBg"><div id="loadingBarFill"></div></div>
+        <div id="loadingStatus">Preparing...</div>
+      </div>
     </div>
   </div>
 
@@ -133,6 +159,7 @@
   </dialog>
 
   <input type="file" id="webMapIn" webkitdirectory style="display:none">
+  <input type="file" id="zipMapIn" accept=".zip" style="display:none">
 
   <script type="module" src="js/main.js"></script>
 </body>

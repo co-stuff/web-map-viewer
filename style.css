@@ -140,6 +140,27 @@ body {
   margin: 4px 8px;
 }
 
+.menu-dropdown-empty {
+  padding: 6px 12px;
+  color: var(--imgui-text-dim);
+  font-size: 12px;
+}
+
+#mapsDropdown {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+#mapsDropdown::-webkit-scrollbar {
+  width: 8px;
+  background: var(--imgui-scrollbar);
+}
+
+#mapsDropdown::-webkit-scrollbar-thumb {
+  background: var(--imgui-scrollbar-grab);
+  border-radius: 3px;
+}
+
 #mainContent {
   display: grid;
   grid-template-columns: 1fr 280px;
@@ -366,6 +387,36 @@ body {
   font-weight: bold;
 }
 
+.imgui-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.imgui-checkbox-row .imgui-checkbox {
+  flex: 1;
+}
+
+.color-swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--imgui-border);
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.color-swatch::-webkit-color-swatch-wrapper {
+  padding: 1px;
+}
+
+.color-swatch::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
 #statusBar {
   display: flex;
   gap: 18px;
@@ -572,6 +623,8 @@ dialog::backdrop {
   line-height: 1.7;
 }
 
+
+
 #mapList {
   margin-top: 16px;
 }
@@ -613,4 +666,132 @@ dialog::backdrop {
 .map-item.loading {
   opacity: 0.5;
   pointer-events: none;
+}
+
+#loadingOverlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#loadingCard {
+  background: var(--imgui-window);
+  border: 1px solid var(--imgui-border);
+  border-radius: var(--imgui-rounding);
+  padding: 20px 28px;
+  min-width: 320px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+}
+#loadingTitle {
+  font-size: 14px;
+  color: var(--imgui-text);
+  margin-bottom: 12px;
+}
+#loadingBarBg {
+  width: 100%;
+  height: 6px;
+  background: var(--imgui-frame);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#loadingBarFill {
+  width: 0%;
+  height: 100%;
+  background: var(--imgui-check);
+  border-radius: 3px;
+  transition: width 0.15s ease-out;
+}
+#loadingStatus {
+  font-size: 12px;
+  color: var(--imgui-text-dim);
+  margin-top: 8px;
+}
+
+#btnHamburger {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--imgui-text);
+  font-size: 20px;
+  padding: 0 8px;
+  cursor: pointer;
+  line-height: 26px;
+}
+
+#btnHamburger:hover {
+  background: var(--imgui-header-hover);
+}
+
+#panelBackdrop {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  #btnHamburger {
+    display: block;
+  }
+
+  #mainContent {
+    grid-template-columns: 1fr;
+  }
+
+  #panel {
+    position: fixed;
+    top: 26px;
+    right: 0;
+    bottom: 24px;
+    width: 280px;
+    z-index: 500;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    border-left: 1px solid var(--imgui-border);
+    background: var(--imgui-bg);
+  }
+
+  #panel.open {
+    transform: translateX(0);
+  }
+
+  #panelBackdrop.open {
+    display: block;
+    position: fixed;
+    top: 26px;
+    left: 0;
+    right: 0;
+    bottom: 24px;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 499;
+  }
+
+  #statusBar {
+    gap: 10px;
+    font-size: 11px;
+    overflow-x: auto;
+  }
+
+  #noFile {
+    padding: 0 20px;
+  }
+
+  #noFileMsg {
+    font-size: 13px;
+  }
+
+  #mapListItems {
+    max-height: 50vh;
+  }
+
+  .menu-dropdown {
+    min-width: 180px;
+  }
+
+  dialog {
+    min-width: unset;
+    width: calc(100vw - 40px);
+    max-width: 320px;
+  }
 }

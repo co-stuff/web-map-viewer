@@ -84,6 +84,7 @@ uniform vec2 uBgSize;
 uniform vec2 uOrigin;
 uniform vec2 uBgWorldPos;
 uniform float uAlpha;
+uniform vec3 uColor;
 varying vec2 vWorldPos;
 void main() {
   float bgX = vWorldPos.x + uBgSize.x * 0.5;
@@ -95,8 +96,8 @@ void main() {
   float dwx = gwx - uOrigin.x;
   float dwy = gwy - uOrigin.y;
 
-  float cx = dwx / 64.0 + dwy / 32.0;
-  float cy = dwy / 32.0 - dwx / 64.0;
+  float cx = floor(dwx / 64.0 + dwy / 32.0 + 0.5);
+  float cy = floor(dwy / 32.0 - dwx / 64.0 + 0.5);
 
   if (cx < 0.0 || cx >= uMapSize.x || cy < 0.0 || cy >= uMapSize.y) {
     discard;
@@ -106,7 +107,7 @@ void main() {
   float blocked = texture2D(uAccessTex, uv).r;
 
   if (blocked > 0.5) {
-    gl_FragColor = vec4(0.78, 0.2, 0.2, uAlpha);
+    gl_FragColor = vec4(uColor, uAlpha);
   } else {
     discard;
   }
@@ -140,6 +141,8 @@ export default class CMapRenderer {
     this.m_portalGroup = null;
     this.m_effectGroup = null;
     this.m_soundGroup = null;
+    this.m_npcGroup = null;
+    this.m_mobGroup = null;
     this.m_overlayMesh = null;
     this.m_accessTexture = null;
     this.m_overlayUniforms = null;
@@ -293,6 +296,20 @@ export default class CMapRenderer {
       });
       this.m_soundGroup = null;
     }
+    if (this.m_npcGroup) {
+      this.m_npcGroup.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+      });
+      this.m_npcGroup = null;
+    }
+    if (this.m_mobGroup) {
+      this.m_mobGroup.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+      });
+      this.m_mobGroup = null;
+    }
     this.m_overlayMesh = null;
     this.m_overlayUniforms = null;
     this.m_mapMesh = null;
@@ -300,7 +317,7 @@ export default class CMapRenderer {
     this.m_animations = [];
   }
 
-  BuildWebMap(manifest, atlasTextures, spriteTextures) {
+  BuildWebMap(manifest, atlasTextures, spriteTextures, vecNpcs, vecMobSpawns) {
     this.ClearScene();
     this.m_bWebMapMode = true;
     this.m_manifest = manifest;
@@ -316,12 +333,8 @@ export default class CMapRenderer {
     this._BuildPortals(manifest, spriteTextures);
     this._BuildEffects(manifest);
     this._BuildSounds(manifest);
-
-    if (manifest.accessB64) {
-      this._BuildAccessOverlayFromB64(manifest.accessB64, manifest);
-    } else if (manifest.access) {
-      this._BuildAccessOverlayFromString(manifest.access, manifest);
-    }
+    this._BuildNpcs(vecNpcs || []);
+    this._BuildMobs(vecMobSpawns || []);
 
     this.m_bDirty = true;
   }
@@ -349,6 +362,12 @@ export default class CMapRenderer {
       const atlas = manifest.atlases[nAtlasIdx];
       if (!atlas || !atlasTextures[nAtlasIdx]) continue;
       const nAtlasSize = atlas.size;
+      const flHalfPx = 0.5 / nAtlasSize;
+
+      const tex = atlasTextures[nAtlasIdx];
+      tex.minFilter = THREE.NearestFilter;
+      tex.magFilter = THREE.NearestFilter;
+      tex.needsUpdate = true;
 
       const positions = [];
       const uvs = [];
@@ -363,10 +382,10 @@ export default class CMapRenderer {
 
         positions.push(flX0, flY1, 0, flX1, flY1, 0, flX1, flY0, 0, flX0, flY0, 0);
 
-        const flU0 = tile.nGx * nTilePx / nAtlasSize;
-        const flU1 = (tile.nGx + 1) * nTilePx / nAtlasSize;
-        const flV1 = 1 - tile.nGy * nTilePx / nAtlasSize;
-        const flV0 = 1 - (tile.nGy + 1) * nTilePx / nAtlasSize;
+        const flU0 = tile.nGx * nTilePx / nAtlasSize + flHalfPx;
+        const flU1 = (tile.nGx + 1) * nTilePx / nAtlasSize - flHalfPx;
+        const flV1 = 1 - tile.nGy * nTilePx / nAtlasSize - flHalfPx;
+        const flV0 = 1 - (tile.nGy + 1) * nTilePx / nAtlasSize + flHalfPx;
 
         uvs.push(flU0, flV1, flU1, flV1, flU1, flV0, flU0, flV0);
 
@@ -380,7 +399,7 @@ export default class CMapRenderer {
       geo.setIndex(indices);
 
       const mat = new THREE.MeshBasicMaterial({
-        map: atlasTextures[nAtlasIdx],
+        map: tex,
         transparent: true,
         depthTest: false
       });
@@ -693,6 +712,8 @@ export default class CMapRenderer {
     this.m_soundGroup = new THREE.Group();
     this.m_soundGroup.renderOrder = 4;
     const coord = manifest.coord;
+    const flTotalPx = manifest.puzzle.cols * manifest.puzzle.tilePx;
+    const flPxPerCell = (manifest.size.w > 0) ? flTotalPx / manifest.size.w : 64.0;
 
     for (const sound of sounds) {
       const flBgX = sound.wx - coord.bgWorldX;
@@ -701,11 +722,12 @@ export default class CMapRenderer {
       const flThreeY = this.m_nBgH / 2 - flBgY;
 
       if (sound.range > 0) {
-        const rangeGeo = new THREE.RingGeometry(sound.range - 1, sound.range + 1, 32);
+        const flRangePx = sound.range * flPxPerCell;
+        const rangeGeo = new THREE.RingGeometry(flRangePx - 1, flRangePx + 1, 64);
         const rangeMat = new THREE.MeshBasicMaterial({
           color: 0x64FF64,
           transparent: true,
-          opacity: 1,
+          opacity: 0.6,
           depthTest: false,
           side: THREE.DoubleSide
         });
@@ -731,74 +753,146 @@ export default class CMapRenderer {
     this.m_scene.add(this.m_soundGroup);
   }
 
-  _BuildAccessOverlayFromString(szAccess, manifest) {
-    const nW = manifest.size.w;
-    const nH = manifest.size.h;
+  _BuildNpcs(vecNpcs) {
+    if (vecNpcs.length === 0) return;
 
-    const texData = new Uint8Array(nW * nH * 4);
-    for (let nY = 0; nY < nH; nY++) {
-      for (let nX = 0; nX < nW; nX++) {
-        const nSrcIdx = nY * nW + nX;
-        const nDstIdx = (nY * nW + nX) * 4;
-        const nBlocked = szAccess.charCodeAt(nSrcIdx) - 48;
-        texData[nDstIdx] = nBlocked * 255;
-        texData[nDstIdx + 1] = 0;
-        texData[nDstIdx + 2] = 0;
-        texData[nDstIdx + 3] = 255;
+    this.m_npcGroup = new THREE.Group();
+    this.m_npcGroup.renderOrder = 6;
+
+    for (const npc of vecNpcs) {
+      const bg = this._CellToBgPixel(npc.nX, npc.nY);
+      const flThreeX = bg.nX - this.m_nBgW / 2;
+      const flThreeY = this.m_nBgH / 2 - bg.nY;
+
+      const positions = new Float32Array([
+        0, 16, 0, 32, 0, 0, 0, -16, 0, -32, 0, 0
+      ]);
+      const indices = [0, 1, 2, 0, 2, 3];
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setIndex(indices);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xFF8800, transparent: true, opacity: 0.5,
+        depthTest: false, side: THREE.DoubleSide
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(flThreeX, flThreeY, 0);
+      mesh.renderOrder = 6;
+      this.m_npcGroup.add(mesh);
+
+      const borderPos = new Float32Array([
+        0, 16, 0, 32, 0, 0, 32, 0, 0, 0, -16, 0,
+        0, -16, 0, -32, 0, 0, -32, 0, 0, 0, 16, 0
+      ]);
+      const borderGeo = new THREE.BufferGeometry();
+      borderGeo.setAttribute('position', new THREE.BufferAttribute(borderPos, 3));
+      const borderMat = new THREE.LineBasicMaterial({ color: 0xFF8800, depthTest: false });
+      const borderLine = new THREE.LineSegments(borderGeo, borderMat);
+      borderLine.position.set(flThreeX, flThreeY, 0);
+      borderLine.renderOrder = 7;
+      this.m_npcGroup.add(borderLine);
+    }
+
+    this.m_scene.add(this.m_npcGroup);
+  }
+
+  _BuildMobs(vecMobSpawns) {
+    if (vecMobSpawns.length === 0) return;
+
+    this.m_mobGroup = new THREE.Group();
+    this.m_mobGroup.renderOrder = 6;
+
+    for (const spawn of vecMobSpawns) {
+      const nCenterX = spawn.nBoundX + Math.floor(spawn.nBoundCX / 2);
+      const nCenterY = spawn.nBoundY + Math.floor(spawn.nBoundCY / 2);
+      const bg = this._CellToBgPixel(nCenterX, nCenterY);
+      const flThreeX = bg.nX - this.m_nBgW / 2;
+      const flThreeY = this.m_nBgH / 2 - bg.nY;
+
+      const geo = new THREE.CircleGeometry(10, 8);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xFF4444, transparent: true, opacity: 0.6,
+        depthTest: false
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(flThreeX, flThreeY, 0);
+      mesh.renderOrder = 6;
+      this.m_mobGroup.add(mesh);
+
+      if (spawn.nBoundCX > 0 && spawn.nBoundCY > 0) {
+        const bgTL = this._CellToBgPixel(spawn.nBoundX, spawn.nBoundY);
+        const bgTR = this._CellToBgPixel(spawn.nBoundX + spawn.nBoundCX, spawn.nBoundY);
+        const bgBR = this._CellToBgPixel(spawn.nBoundX + spawn.nBoundCX, spawn.nBoundY + spawn.nBoundCY);
+        const bgBL = this._CellToBgPixel(spawn.nBoundX, spawn.nBoundY + spawn.nBoundCY);
+
+        const flOffX = -this.m_nBgW / 2;
+        const flOffY = this.m_nBgH / 2;
+
+        const borderPos = new Float32Array([
+          bgTL.nX + flOffX, flOffY - bgTL.nY, 0,
+          bgTR.nX + flOffX, flOffY - bgTR.nY, 0,
+          bgTR.nX + flOffX, flOffY - bgTR.nY, 0,
+          bgBR.nX + flOffX, flOffY - bgBR.nY, 0,
+          bgBR.nX + flOffX, flOffY - bgBR.nY, 0,
+          bgBL.nX + flOffX, flOffY - bgBL.nY, 0,
+          bgBL.nX + flOffX, flOffY - bgBL.nY, 0,
+          bgTL.nX + flOffX, flOffY - bgTL.nY, 0
+        ]);
+        const borderGeo = new THREE.BufferGeometry();
+        borderGeo.setAttribute('position', new THREE.BufferAttribute(borderPos, 3));
+        const borderMat = new THREE.LineBasicMaterial({
+          color: 0xFF4444, transparent: true, opacity: 0.4, depthTest: false
+        });
+        const borderLine = new THREE.LineSegments(borderGeo, borderMat);
+        borderLine.renderOrder = 6;
+        this.m_mobGroup.add(borderLine);
       }
     }
 
-    this.m_accessTexture = new THREE.DataTexture(texData, nW, nH, THREE.RGBAFormat);
-    this.m_accessTexture.minFilter = THREE.NearestFilter;
-    this.m_accessTexture.magFilter = THREE.NearestFilter;
-    this.m_accessTexture.needsUpdate = true;
-
-    this._CreateAccessOverlayMesh(manifest);
+    this.m_scene.add(this.m_mobGroup);
   }
 
-  _BuildAccessOverlayFromB64(szB64, manifest) {
-    const nW = manifest.size.w;
-    const nH = manifest.size.h;
-    const szChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    const vecLookup = new Uint8Array(128);
-    for (let i = 0; i < szChars.length; i++) vecLookup[szChars.charCodeAt(i)] = i;
-
-    const nRawLen = (szB64.length * 3) / 4
-      - (szB64[szB64.length - 1] === '=' ? 1 : 0)
-      - (szB64[szB64.length - 2] === '=' ? 1 : 0);
-    const vecBytes = new Uint8Array(nRawLen);
-    let nOut = 0;
-    for (let i = 0; i < szB64.length; i += 4) {
-      const a = vecLookup[szB64.charCodeAt(i)];
-      const b = vecLookup[szB64.charCodeAt(i + 1)];
-      const c = vecLookup[szB64.charCodeAt(i + 2)];
-      const d = vecLookup[szB64.charCodeAt(i + 3)];
-      const n = (a << 18) | (b << 12) | (c << 6) | d;
-      if (nOut < nRawLen) vecBytes[nOut++] = (n >> 16) & 0xFF;
-      if (nOut < nRawLen) vecBytes[nOut++] = (n >> 8) & 0xFF;
-      if (nOut < nRawLen) vecBytes[nOut++] = n & 0xFF;
+  SetNpcsVisible(bVisible) {
+    if (this.m_npcGroup) {
+      this.m_npcGroup.visible = bVisible;
+      this.m_bDirty = true;
     }
+  }
 
-    const texData = new Uint8Array(nW * nH * 4);
-    for (let nY = 0; nY < nH; nY++) {
-      for (let nX = 0; nX < nW; nX++) {
-        const nBitIdx = nY * nW + nX;
-        const nBlocked = (vecBytes[nBitIdx >> 3] >> (7 - (nBitIdx & 7))) & 1;
-        const nDstIdx = (nY * nW + nX) * 4;
-        texData[nDstIdx] = nBlocked * 255;
-        texData[nDstIdx + 1] = 0;
-        texData[nDstIdx + 2] = 0;
-        texData[nDstIdx + 3] = 255;
+  SetMobsVisible(bVisible) {
+    if (this.m_mobGroup) {
+      this.m_mobGroup.visible = bVisible;
+      this.m_bDirty = true;
+    }
+  }
+
+  SetAccessColor(nR, nG, nB) {
+    if (this.m_overlayUniforms) {
+      this.m_overlayUniforms.uColor.value.set(nR / 255, nG / 255, nB / 255);
+      this.m_bDirty = true;
+    }
+  }
+
+  _SetGroupColor(group, nColor) {
+    if (!group) return;
+    group.traverse((obj) => {
+      if (obj.material && obj.material.color) {
+        obj.material.color.setHex(nColor);
+        obj.material.needsUpdate = true;
       }
-    }
-
-    this.m_accessTexture = new THREE.DataTexture(texData, nW, nH, THREE.RGBAFormat);
-    this.m_accessTexture.minFilter = THREE.NearestFilter;
-    this.m_accessTexture.magFilter = THREE.NearestFilter;
-    this.m_accessTexture.needsUpdate = true;
-
-    this._CreateAccessOverlayMesh(manifest);
+    });
+    this.m_bDirty = true;
   }
+
+  SetPortalColor(nColor) {
+    this._SetGroupColor(this.m_portalGroup, nColor);
+    if (this.m_portalMaterial && this.m_portalMaterial.uniforms) return;
+  }
+
+  SetEffectColor(nColor) { this._SetGroupColor(this.m_effectGroup, nColor); }
+  SetSoundColor(nColor) { this._SetGroupColor(this.m_soundGroup, nColor); }
+  SetNpcColor(nColor) { this._SetGroupColor(this.m_npcGroup, nColor); }
+  SetMobColor(nColor) { this._SetGroupColor(this.m_mobGroup, nColor); }
 
   BuildAccessOverlayFromDmap(pDmap, manifest) {
     if (!manifest) manifest = this.m_manifest;
@@ -844,7 +938,8 @@ export default class CMapRenderer {
       uBgSize: { value: new THREE.Vector2(this.m_nBgW, this.m_nBgH) },
       uOrigin: { value: new THREE.Vector2(coord.originX, coord.originY) },
       uBgWorldPos: { value: new THREE.Vector2(coord.bgWorldX, coord.bgWorldY) },
-      uAlpha: { value: 0.4 }
+      uAlpha: { value: 0.4 },
+      uColor: { value: new THREE.Vector3(0.78, 0.2, 0.2) }
     };
 
     const geo = new THREE.PlaneGeometry(this.m_nBgW, this.m_nBgH);
@@ -984,8 +1079,8 @@ export default class CMapRenderer {
     if (this.m_bWebMapMode) {
       const bg = this._CellToBgPixel(nCx, nCy);
       return {
-        flX: bg.nX - this.m_nBgW / 2 + 32,
-        flY: this.m_nBgH / 2 - bg.nY - 16
+        flX: bg.nX - this.m_nBgW / 2,
+        flY: this.m_nBgH / 2 - bg.nY
       };
     }
     if (this.m_bIsIso) {
@@ -1029,7 +1124,7 @@ export default class CMapRenderer {
       const flDwy = flGwy - m.originY;
       const flCx = flDwx / 64 + flDwy / 32;
       const flCy = flDwy / 32 - flDwx / 64;
-      return { nX: Math.floor(flCx), nY: Math.floor(flCy) };
+      return { nX: Math.round(flCx), nY: Math.round(flCy) };
     }
     let flCx, flCy;
     if (this.m_bIsIso) {

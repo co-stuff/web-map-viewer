@@ -4,20 +4,29 @@ import CWebMapLoader from './CWebMapLoader.js';
 const viewport = document.getElementById('viewport');
 const overlayCanvas = document.getElementById('overlayCanvas');
 const webMapIn = document.getElementById('webMapIn');
+const zipMapIn = document.getElementById('zipMapIn');
 
 let g_pWebMap = null;
 let g_renderer = new CMapRenderer(viewport);
 
 let g_nHoverX = -1, g_nHoverY = -1;
 let g_bShowAccessGrid = true, g_bShowPortals = true, g_bShowEffects = true, g_bShowSounds = true;
-let g_bShowCovers = true, g_bShowScenes = true;
+let g_bShowCovers = true, g_bShowScenes = true, g_bShowNpcs = true, g_bShowMobs = true;
+let g_szPortalColor = '#00FFFF', g_szEffectColor = '#FFFF00', g_szSoundColor = '#64FF64';
+let g_szNpcColor = '#FF8800', g_szMobColor = '#FF4444';
 let g_bDirty = true;
 
-let g_vecAccessBits = null;
+let g_pDmap = null;
 let g_flMouseX = 0, g_flMouseY = 0;
 
 let g_bIsDragging = false;
 let g_flDragStartX = 0, g_flDragStartY = 0;
+
+let g_bTouchDragging = false;
+let g_nTouchCount = 0;
+let g_flTouchStartX = 0, g_flTouchStartY = 0;
+let g_flPinchDist = 0, g_flPinchZoom = 0;
+let g_flPinchCX = 0, g_flPinchCY = 0;
 
 let g_flLastTime = 0, g_nFrames = 0, g_flFpsAccum = 0, g_flFPS = 0;
 
@@ -27,62 +36,78 @@ function HasMap() { return g_renderer.m_bWebMapMode; }
 function GetMapW() { return g_renderer.m_nMapW; }
 function GetMapH() { return g_renderer.m_nMapH; }
 
+function ShowLoading() {
+  document.getElementById('loadingOverlay').style.display = '';
+  document.getElementById('loadingBarFill').style.width = '0%';
+  document.getElementById('loadingStatus').textContent = 'Preparing...';
+}
+
+function UpdateLoading(nCurrent, nTotal, szStatus) {
+  document.getElementById('loadingStatus').textContent = szStatus;
+  if (nTotal > 0) {
+    const flPct = Math.min(100, (nCurrent / nTotal) * 100);
+    document.getElementById('loadingBarFill').style.width = flPct + '%';
+  }
+}
+
+function HideLoading() {
+  document.getElementById('loadingOverlay').style.display = 'none';
+}
+
 async function OpenWebMap(fileList) {
+  ShowLoading();
   const loader = new CWebMapLoader();
-  if (!(await loader.Load(fileList))) return;
+  if (!(await loader.Load(fileList, UpdateLoading))) { HideLoading(); return; }
   _ActivateMap(loader);
+  HideLoading();
 }
 
 async function OpenWebMapFromUrl(szBaseUrl) {
+  ShowLoading();
   const loader = new CWebMapLoader();
-  if (!(await loader.LoadFromUrl(szBaseUrl))) return false;
+  if (!(await loader.LoadFromUrl(szBaseUrl, UpdateLoading))) { HideLoading(); return false; }
   _ActivateMap(loader);
+  HideLoading();
   return true;
 }
 
-function _DecodeAccessBits(szB64, nW, nH) {
-  const szChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  const vecLookup = new Uint8Array(128);
-  for (let i = 0; i < szChars.length; i++) vecLookup[szChars.charCodeAt(i)] = i;
+async function OpenZipMapFile(file) {
+  ShowLoading();
+  const loader = new CWebMapLoader();
+  const blob = await file.arrayBuffer().then(buf => new Blob([buf]));
+  if (!(await loader.LoadFromZipBlob(blob, UpdateLoading))) { HideLoading(); return false; }
+  _ActivateMap(loader);
+  HideLoading();
+  return true;
+}
 
-  const nRawLen = (szB64.length * 3) / 4
-    - (szB64[szB64.length - 1] === '=' ? 1 : 0)
-    - (szB64[szB64.length - 2] === '=' ? 1 : 0);
-  const vecBytes = new Uint8Array(nRawLen);
-  let nOut = 0;
-  for (let i = 0; i < szB64.length; i += 4) {
-    const a = vecLookup[szB64.charCodeAt(i)];
-    const b = vecLookup[szB64.charCodeAt(i + 1)];
-    const c = vecLookup[szB64.charCodeAt(i + 2)];
-    const d = vecLookup[szB64.charCodeAt(i + 3)];
-    const n = (a << 18) | (b << 12) | (c << 6) | d;
-    if (nOut < nRawLen) vecBytes[nOut++] = (n >> 16) & 0xFF;
-    if (nOut < nRawLen) vecBytes[nOut++] = (n >> 8) & 0xFF;
-    if (nOut < nRawLen) vecBytes[nOut++] = n & 0xFF;
-  }
-  return vecBytes;
+async function OpenZipMapFromUrl(szUrl) {
+  ShowLoading();
+  const loader = new CWebMapLoader();
+  if (!(await loader.LoadFromZipUrl(szUrl, UpdateLoading))) { HideLoading(); return false; }
+  _ActivateMap(loader);
+  HideLoading();
+  return true;
 }
 
 function _IsBlocked(nX, nY) {
-  if (!g_vecAccessBits || !g_pWebMap) return false;
-  const nW = g_pWebMap.m_manifest.size.w;
-  const nBitIdx = nY * nW + nX;
-  return (g_vecAccessBits[nBitIdx >> 3] >> (7 - (nBitIdx & 7))) & 1;
+  if (!g_pDmap) return false;
+  return g_pDmap.GetBlocked(nX, nY) !== 0;
 }
 
 function _ActivateMap(loader) {
   g_pWebMap = loader;
   g_nHoverX = -1;
   g_nHoverY = -1;
+  g_pDmap = loader.m_pDmap || null;
 
   const m = loader.m_manifest;
-  if (m.accessB64) {
-    g_vecAccessBits = _DecodeAccessBits(m.accessB64, m.size.w, m.size.h);
-  } else {
-    g_vecAccessBits = null;
-  }
 
-  g_renderer.BuildWebMap(m, loader.m_atlasTextures, loader.m_spriteTextures);
+  g_renderer.BuildWebMap(m, loader.m_atlasTextures, loader.m_spriteTextures, loader.m_vecNpcs, loader.m_vecMobSpawns);
+
+  if (g_pDmap) {
+    g_renderer.BuildAccessOverlayFromDmap(g_pDmap, m);
+  }
   PopulateWebMapItems(m);
 
   document.getElementById('noFile').style.display = 'none';
@@ -120,7 +145,8 @@ function PopulateWebMapItems(manifest) {
   const nSounds = (manifest.sounds || []).length;
   const nCovers = (manifest.covers || []).length;
   const nScenes = (manifest.scenes || []).length;
-
+  const nNpcs = g_pWebMap ? g_pWebMap.m_vecNpcs.length : 0;
+  const nMobSpawns = g_pWebMap ? g_pWebMap.m_vecMobSpawns.length : 0;
   document.getElementById('mapInfoContent').innerHTML =
     `Name: ${manifest.name || '—'}<br>` +
     `Size: ${manifest.size.w} x ${manifest.size.h}<br>` +
@@ -131,7 +157,9 @@ function PopulateWebMapItems(manifest) {
     `Effects: ${nEffects}<br>` +
     `Sounds: ${nSounds}<br>` +
     `Covers: ${nCovers}<br>` +
-    `Scenes: ${nScenes}`;
+    `Scenes: ${nScenes}<br>` +
+    `NPCs: ${nNpcs}<br>` +
+    `Mob Spawns: ${nMobSpawns}`;
 
   _BuildObjList('objPortals', manifest.portals || [], (p, i) => ({
     szInfo: `ID ${p.id}`, szPos: `(${p.x}, ${p.y})`,
@@ -157,6 +185,22 @@ function PopulateWebMapItems(manifest) {
     szInfo: `${(s.parts || []).length} parts`, szPos: `(${s.tileX}, ${s.tileY})`,
     fnGo: () => GoToCell(s.tileX, s.tileY)
   }));
+
+  const vecNpcs = g_pWebMap ? g_pWebMap.m_vecNpcs : [];
+  _BuildObjList('objNpcs', vecNpcs, (npc, i) => ({
+    szInfo: npc.szName || `NPC ${npc.nNpcId}`, szPos: `(${npc.nX}, ${npc.nY})`,
+    fnGo: () => GoToCell(npc.nX, npc.nY)
+  }));
+
+  const vecMobSpawns = g_pWebMap ? g_pWebMap.m_vecMobSpawns : [];
+  _BuildObjList('objMobs', vecMobSpawns, (spawn, i) => {
+    const nCX = spawn.nBoundX + Math.floor(spawn.nBoundCX / 2);
+    const nCY = spawn.nBoundY + Math.floor(spawn.nBoundCY / 2);
+    return {
+      szInfo: spawn.szName || `Mob ${spawn.nNpcType}`, szPos: `(${nCX}, ${nCY})`,
+      fnGo: () => GoToCell(nCX, nCY)
+    };
+  });
 }
 
 function _BuildObjList(szContainerId, vecItems, fnMapper) {
@@ -261,9 +305,12 @@ window.addEventListener('mouseup', (e) => {
   }
 });
 
+const g_bIsTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
 viewport.addEventListener('wheel', (e) => {
   e.preventDefault();
-  if (!HasMap() || !e.ctrlKey) return;
+  if (!HasMap()) return;
+  if (!e.ctrlKey && !g_bIsTouchDevice) return;
   let flFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
   if (e.shiftKey) flFactor = e.deltaY < 0 ? 1.5 : 1 / 1.5;
 
@@ -288,6 +335,81 @@ viewport.addEventListener('wheel', (e) => {
 
 viewport.addEventListener('contextmenu', (e) => e.preventDefault());
 
+function _TouchDist(a, b) {
+  const dx = a.clientX - b.clientX;
+  const dy = a.clientY - b.clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+viewport.addEventListener('touchstart', (e) => {
+  if (!HasMap()) return;
+  e.preventDefault();
+  g_nTouchCount = e.touches.length;
+
+  if (g_nTouchCount === 1) {
+    g_bTouchDragging = true;
+    g_flTouchStartX = e.touches[0].clientX;
+    g_flTouchStartY = e.touches[0].clientY;
+  } else if (g_nTouchCount === 2) {
+    g_bTouchDragging = false;
+    g_flPinchDist = _TouchDist(e.touches[0], e.touches[1]);
+    g_flPinchZoom = g_renderer.m_flZoom;
+    g_flPinchCX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+    g_flPinchCY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+  }
+}, { passive: false });
+
+viewport.addEventListener('touchmove', (e) => {
+  if (!HasMap()) return;
+  e.preventDefault();
+
+  if (e.touches.length === 1 && g_bTouchDragging) {
+    const flDx = (e.touches[0].clientX - g_flTouchStartX) / g_renderer.m_flZoom;
+    const flDy = (e.touches[0].clientY - g_flTouchStartY) / g_renderer.m_flZoom;
+    g_flTouchStartX = e.touches[0].clientX;
+    g_flTouchStartY = e.touches[0].clientY;
+    g_renderer.SetCamera(
+      g_renderer.m_flCamX - flDx,
+      g_renderer.m_flCamY + flDy,
+      g_renderer.m_flZoom
+    );
+    g_bDirty = true;
+  } else if (e.touches.length === 2) {
+    const flNewDist = _TouchDist(e.touches[0], e.touches[1]);
+    if (g_flPinchDist > 0) {
+      const flScale = flNewDist / g_flPinchDist;
+      let flNewZoom = g_flPinchZoom * flScale;
+      flNewZoom = Math.max(0.05, Math.min(128, flNewZoom));
+
+      const rect = viewport.getBoundingClientRect();
+      const flSx = g_flPinchCX - rect.left;
+      const flSy = g_flPinchCY - rect.top;
+      const wBefore = g_renderer.ScreenToWorld(flSx, flSy);
+
+      const nVW = viewport.clientWidth;
+      const nVH = viewport.clientHeight;
+      const flNewCamX = wBefore.flX - (flSx - nVW / 2) / flNewZoom;
+      const flNewCamY = wBefore.flY + (flSy - nVH / 2) / flNewZoom;
+
+      g_renderer.SetCamera(flNewCamX, flNewCamY, flNewZoom);
+      g_bDirty = true;
+      UpdateStatus();
+    }
+  }
+}, { passive: false });
+
+viewport.addEventListener('touchend', (e) => {
+  if (e.touches.length === 0) {
+    g_bTouchDragging = false;
+    g_nTouchCount = 0;
+  } else if (e.touches.length === 1) {
+    g_bTouchDragging = true;
+    g_flTouchStartX = e.touches[0].clientX;
+    g_flTouchStartY = e.touches[0].clientY;
+    g_nTouchCount = 1;
+  }
+});
+
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.ctrlKey && e.key === 'g') { e.preventDefault(); ShowGoTo(); return; }
@@ -300,6 +422,13 @@ webMapIn.addEventListener('change', async (e) => {
   if (!fileList || fileList.length === 0) return;
   await OpenWebMap(fileList);
   webMapIn.value = '';
+});
+
+zipMapIn.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  await OpenZipMapFile(file);
+  zipMapIn.value = '';
 });
 
 function EnableMenus(bEnabled) {
@@ -322,6 +451,7 @@ document.addEventListener('click', () => CloseMenus());
 function CloseMenus() { document.querySelectorAll('.menu-item').forEach(i => i.classList.remove('open')); g_openMenu = null; }
 
 document.querySelector('[data-action="openWebMap"]').addEventListener('click', () => { CloseMenus(); webMapIn.click(); });
+document.querySelector('[data-action="openZipMap"]').addEventListener('click', () => { CloseMenus(); zipMapIn.click(); });
 
 function _SyncToggle(szAction, szCheckboxId, fnGet, fnSet, fnApply) {
   document.querySelector(`[data-action="${szAction}"]`).addEventListener('click', (e) => {
@@ -356,6 +486,48 @@ _SyncToggle('toggleCovers', 'cCovers',
 _SyncToggle('toggleScenes', 'cScenes',
   () => g_bShowScenes, (v) => g_bShowScenes = v,
   (v) => g_renderer.SetScenesVisible(v));
+_SyncToggle('toggleNpcs', 'cNpcs',
+  () => g_bShowNpcs, (v) => g_bShowNpcs = v,
+  (v) => g_renderer.SetNpcsVisible(v));
+_SyncToggle('toggleMobs', 'cMobs',
+  () => g_bShowMobs, (v) => g_bShowMobs = v,
+  (v) => g_renderer.SetMobsVisible(v));
+
+function _HexToRgb01(szHex) {
+  const n = parseInt(szHex.substring(1), 16);
+  return { r: ((n >> 16) & 0xFF) / 255, g: ((n >> 8) & 0xFF) / 255, b: (n & 0xFF) / 255 };
+}
+
+document.getElementById('clrAccess').addEventListener('input', (e) => {
+  const c = _HexToRgb01(e.target.value);
+  g_renderer.SetAccessColor(c.r, c.g, c.b);
+  g_bDirty = true;
+});
+document.getElementById('clrPortals').addEventListener('input', (e) => {
+  g_szPortalColor = e.target.value;
+  g_renderer.SetPortalColor(parseInt(e.target.value.substring(1), 16));
+  g_bDirty = true;
+});
+document.getElementById('clrEffects').addEventListener('input', (e) => {
+  g_szEffectColor = e.target.value;
+  g_renderer.SetEffectColor(parseInt(e.target.value.substring(1), 16));
+  g_bDirty = true;
+});
+document.getElementById('clrSounds').addEventListener('input', (e) => {
+  g_szSoundColor = e.target.value;
+  g_renderer.SetSoundColor(parseInt(e.target.value.substring(1), 16));
+  g_bDirty = true;
+});
+document.getElementById('clrNpcs').addEventListener('input', (e) => {
+  g_szNpcColor = e.target.value;
+  g_renderer.SetNpcColor(parseInt(e.target.value.substring(1), 16));
+  g_bDirty = true;
+});
+document.getElementById('clrMobs').addEventListener('input', (e) => {
+  g_szMobColor = e.target.value;
+  g_renderer.SetMobColor(parseInt(e.target.value.substring(1), 16));
+  g_bDirty = true;
+});
 
 document.querySelector('[data-action="goTo"]').addEventListener('click', () => { CloseMenus(); ShowGoTo(); });
 document.querySelector('[data-action="centerMap"]').addEventListener('click', () => { CloseMenus(); CenterMap(); });
@@ -393,7 +565,7 @@ function RenderWebMapLabels(nVW, nVH) {
 
   if (g_bShowPortals && m.portals) {
     ctx.font = '11px Consolas, monospace';
-    ctx.fillStyle = '#00FFFF';
+    ctx.fillStyle = g_szPortalColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
     for (const portal of m.portals) {
@@ -410,7 +582,7 @@ function RenderWebMapLabels(nVW, nVH) {
 
   if (g_bShowEffects && m.effects) {
     ctx.font = '10px Consolas, monospace';
-    ctx.fillStyle = '#FFFF00';
+    ctx.fillStyle = g_szEffectColor;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     for (const effect of m.effects) {
@@ -425,7 +597,7 @@ function RenderWebMapLabels(nVW, nVH) {
 
   if (g_bShowSounds && m.sounds) {
     ctx.font = '10px Consolas, monospace';
-    ctx.fillStyle = '#64FF64';
+    ctx.fillStyle = g_szSoundColor;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     for (const sound of m.sounds) {
@@ -433,7 +605,47 @@ function RenderWebMapLabels(nVW, nVH) {
       const flThreeY = nBgH / 2 - (sound.wy - coord.bgWorldY);
       const s = g_renderer.WorldToScreen(flThreeX, flThreeY);
       if (s.flX >= -50 && s.flX <= nVW + 50 && s.flY >= -50 && s.flY <= nVH + 50) {
-        ctx.fillText(sound.file, s.flX + 8 * g_renderer.m_flZoom, s.flY);
+        const szName = sound.file.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
+        const szLabel = sound.range > 0 ? `${szName} (R:${sound.range})` : szName;
+        ctx.fillText(szLabel, s.flX + 8 * g_renderer.m_flZoom, s.flY);
+      }
+    }
+  }
+
+  if (g_bShowNpcs && g_pWebMap && g_pWebMap.m_vecNpcs.length > 0) {
+    ctx.font = '11px Consolas, monospace';
+    ctx.fillStyle = g_szNpcColor;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (const npc of g_pWebMap.m_vecNpcs) {
+      const nWx = 32 * (npc.nX - npc.nY) + coord.originX;
+      const nWy = 16 * (npc.nX + npc.nY) + coord.originY;
+      const flThreeX = (nWx - coord.bgWorldX) - nBgW / 2;
+      const flThreeY = nBgH / 2 - (nWy - coord.bgWorldY);
+      const s = g_renderer.WorldToScreen(flThreeX, flThreeY);
+      if (s.flX >= -80 && s.flX <= nVW + 80 && s.flY >= -20 && s.flY <= nVH + 20) {
+        const szLabel = npc.szName || `NPC ${npc.nNpcId}`;
+        ctx.fillText(szLabel, s.flX + 8 * g_renderer.m_flZoom, s.flY);
+      }
+    }
+  }
+
+  if (g_bShowMobs && g_pWebMap && g_pWebMap.m_vecMobSpawns.length > 0) {
+    ctx.font = '10px Consolas, monospace';
+    ctx.fillStyle = g_szMobColor;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (const spawn of g_pWebMap.m_vecMobSpawns) {
+      const nCX = spawn.nBoundX + Math.floor(spawn.nBoundCX / 2);
+      const nCY = spawn.nBoundY + Math.floor(spawn.nBoundCY / 2);
+      const nWx = 32 * (nCX - nCY) + coord.originX;
+      const nWy = 16 * (nCX + nCY) + coord.originY;
+      const flThreeX = (nWx - coord.bgWorldX) - nBgW / 2;
+      const flThreeY = nBgH / 2 - (nWy - coord.bgWorldY);
+      const s = g_renderer.WorldToScreen(flThreeX, flThreeY);
+      if (s.flX >= -80 && s.flX <= nVW + 80 && s.flY >= -20 && s.flY <= nVH + 20) {
+        const szLabel = spawn.szName || `Mob ${spawn.nNpcType}`;
+        ctx.fillText(szLabel, s.flX + 12, s.flY);
       }
     }
   }
@@ -446,10 +658,10 @@ function RenderWebMapLabels(nVW, nVH) {
   const flToThreeX = (wx) => (wx - coord.bgWorldX) - nBgW / 2;
   const flToThreeY = (wy) => nBgH / 2 - (wy - coord.bgWorldY);
 
-  const sTop = g_renderer.WorldToScreen(flToThreeX(nWx), flToThreeY(nWy));
-  const sRight = g_renderer.WorldToScreen(flToThreeX(nWx + 32), flToThreeY(nWy + 16));
-  const sBottom = g_renderer.WorldToScreen(flToThreeX(nWx), flToThreeY(nWy + 32));
-  const sLeft = g_renderer.WorldToScreen(flToThreeX(nWx - 32), flToThreeY(nWy + 16));
+  const sTop = g_renderer.WorldToScreen(flToThreeX(nWx), flToThreeY(nWy - 16));
+  const sRight = g_renderer.WorldToScreen(flToThreeX(nWx + 32), flToThreeY(nWy));
+  const sBottom = g_renderer.WorldToScreen(flToThreeX(nWx), flToThreeY(nWy + 16));
+  const sLeft = g_renderer.WorldToScreen(flToThreeX(nWx - 32), flToThreeY(nWy));
 
   const bBlocked = _IsBlocked(g_nHoverX, g_nHoverY);
 
@@ -529,9 +741,32 @@ function OnFrame(flTime) {
   requestAnimationFrame(OnFrame);
 }
 
+const elPanel = document.getElementById('panel');
+const elBackdrop = document.getElementById('panelBackdrop');
+const elHamburger = document.getElementById('btnHamburger');
+
+function TogglePanel() {
+  elPanel.classList.toggle('open');
+  elBackdrop.classList.toggle('open');
+}
+
+elHamburger.addEventListener('click', (e) => {
+  e.stopPropagation();
+  TogglePanel();
+});
+
+elBackdrop.addEventListener('click', () => {
+  elPanel.classList.remove('open');
+  elBackdrop.classList.remove('open');
+});
+
 window.addEventListener('resize', () => {
   g_renderer.Resize();
   g_bDirty = true;
+  if (window.innerWidth > 768) {
+    elPanel.classList.remove('open');
+    elBackdrop.classList.remove('open');
+  }
 });
 
 document.querySelectorAll('.imgui-title').forEach(t => {
@@ -549,12 +784,23 @@ document.querySelectorAll('.obj-tab').forEach(tab => {
 
 requestAnimationFrame(OnFrame);
 
+async function _TryLoadMap(szName) {
+  const bFolder = await OpenWebMapFromUrl('toWeb/' + szName);
+  if (bFolder) return true;
+  const zipResp = await fetch('toWeb/' + szName + '.zip', { method: 'HEAD' }).catch(() => null);
+  if (zipResp && zipResp.ok) {
+    return await OpenZipMapFromUrl('toWeb/' + szName + '.zip');
+  }
+  console.error('[_TryLoadMap] map not found:', szName);
+  return false;
+}
+
 async function DiscoverMaps() {
   const params = new URLSearchParams(window.location.search);
   const szDirectMap = params.get('map');
 
   if (szDirectMap) {
-    const bOk = await OpenWebMapFromUrl('toWeb/' + szDirectMap);
+    const bOk = await _TryLoadMap(szDirectMap);
     if (bOk) return;
   }
 
@@ -576,7 +822,7 @@ async function DiscoverMaps() {
       btn.addEventListener('click', async () => {
         btn.classList.add('loading');
         btn.textContent = szName + ' ...';
-        await OpenWebMapFromUrl('toWeb/' + szName);
+        await _TryLoadMap(szName);
         btn.classList.remove('loading');
         btn.textContent = szName;
       });
@@ -584,6 +830,19 @@ async function DiscoverMaps() {
     }
 
     elList.style.display = '';
+
+    const elDropdown = document.getElementById('mapsDropdown');
+    const elEmpty = document.getElementById('mapsDropdownEmpty');
+    elEmpty.style.display = 'none';
+    for (const szName of vecMaps) {
+      const btn = document.createElement('button');
+      btn.textContent = szName;
+      btn.addEventListener('click', async () => {
+        CloseMenus();
+        await _TryLoadMap(szName);
+      });
+      elDropdown.appendChild(btn);
+    }
   } catch (e) {}
 }
 

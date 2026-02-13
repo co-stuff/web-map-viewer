@@ -24,10 +24,3 @@ for (let i = 0; i < 10; i++) {
 
   g_surfaceColors[i] = [(flR * 255) | 0, (flG * 255) | 0, (flB * 255) | 0];
 }
-
-export function GetCellRGB(nBlocked, nSurface, bShowBlocked) {
-  if (nBlocked) {
-    return bShowBlocked ? g_blockedColorRGB : g_bgColorRGB;
-  }
-  return g_surfaceColors[nSurface % 10];
-}
